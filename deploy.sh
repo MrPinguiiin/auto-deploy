@@ -319,16 +319,34 @@ case $runtime_choice in
   4) deno cache deps.ts ;;
 esac
 
-# Step 6: Build with loading
+# Step 6: Build project
 build_project() {
   echo -e "${YELLOW}Starting build process...${NC}"
+  
+  # Perintah build sesuai runtime
   case $runtime_choice in
-    1) spinner "npm run build" "Building with npm" ;;
-    2) spinner "pnpm run build" "Building with pnpm" ;;
-    3) spinner "bun run build" "Building with bun" ;;
-    4) spinner "deno run -A npm:prisma db push && deno run -A npm:prisma generate" "Building with deno" ;;
+    1) build_cmd="npm run build" ;;
+    2) build_cmd="pnpm run build" ;;
+    3) build_cmd="bun --bun run build" ;;
+    4) build_cmd="deno run -A npm:prisma generate && deno run -A npm:prisma db push" ;;
   esac
-  echo -e "${GREEN}Build completed successfully!${NC}"
+  
+  spinner "$build_cmd" "Building with ${build_cmd%% *}"
+  
+  # Pengecekan hasil build
+  if [ -d "build" ] || [ -d ".svelte-kit" ] || [ -d "dist" ]; then
+    echo -e "${GREEN}Build berhasil!${NC}"
+    echo -e "${YELLOW}Hasil build ditemukan di:"
+    [ -d "build" ] && echo "- build/"
+    [ -d ".svelte-kit" ] && echo "- .svelte-kit/"
+    [ -d "dist" ] && echo "- dist/"
+    echo -e "${NC}"
+  else
+    echo -e "${RED}Warning: Tidak ditemukan folder hasil build!${NC}"
+    echo -e "${YELLOW}Periksa:${NC}"
+    echo "1. Apakah project sudah dikonfigurasi dengan benar"
+    echo "2. Ada error selama proses build"
+  fi
 }
 
 # Step 7: Setup Nginx reverse proxy
