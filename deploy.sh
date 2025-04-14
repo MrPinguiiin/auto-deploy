@@ -20,6 +20,8 @@ install_runtime() {
       npm install -g pnpm
       ;;
     3) # bun
+      echo -e "${GREEN}Installing dependencies for bun...${NC}"
+      apt install -y unzip
       echo -e "${GREEN}Installing bun...${NC}"
       curl -fsSL https://bun.sh/install | bash
       ;;
