@@ -87,9 +87,8 @@ setup_database() {
     echo "1) PostgreSQL"
     echo "2) MySQL"
     echo "3) SQLite"
-    echo "4) Redis"
     echo "5) Gunakan file docker-compose.yml sendiri"
-    read -p "Pilihan [1-5]: " db_choice
+    read -p "Pilihan [1-3,5]: " db_choice
 
     # Generate random credentials
     db_name="db_${folder_name}"
@@ -97,7 +96,7 @@ setup_database() {
     db_pass="$(openssl rand -base64 12)"
 
     case $db_choice in
-      1|2|4) # PostgreSQL/MySQL/Redis
+      1|2) # PostgreSQL/MySQL
         apt install -y docker.io docker-compose
         
         cat > docker-compose.yml <<EOL
@@ -118,7 +117,7 @@ EOL
     volumes:
       - pg_data:/var/lib/postgresql/data
 EOL
-        elif [ $db_choice -eq 2 ]; then
+        else
           cat >> docker-compose.yml <<EOL
     image: mysql:latest
     environment:
@@ -131,129 +130,125 @@ EOL
     volumes:
       - mysql_data:/var/lib/mysql
 EOL
-        else
-          cat >> docker-compose.yml <<EOL
-    image: redis:latest
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-EOL
         fi
         
         cat >> docker-compose.yml <<EOL
 volumes:
   pg_data:
   mysql_data:
-  redis_data:
 EOL
         
         docker-compose up -d
+        
+        # Auto setup .env
+        update_env_database
+        
+        echo -e "${GREEN}Database setup selesai!${NC}"
+        echo -e "${YELLOW}Detail koneksi:${NC}"
+        if [ $db_choice -eq 1 ]; then
+          echo "Type: PostgreSQL"
+          echo "Host: localhost"
+          echo "Port: 5432"
+        else
+          echo "Type: MySQL"
+          echo "Host: localhost"
+          echo "Port: 3306"
+        fi
+        echo "Database: ${db_name}"
+        echo "Username: ${db_user}"
+        echo "Password: ${db_pass}"
         ;;
       
       3) # SQLite
         touch "${folder_name}.db"
+        update_env_database
+        echo -e "${GREEN}SQLite database created: $(pwd)/${folder_name}.db${NC}"
         ;;
       
       5) # Custom compose file
         if [ -f "docker-compose.yml" ]; then
           docker-compose up -d
+          echo -e "${GREEN}Custom database started using docker-compose.yml${NC}"
         else
           echo -e "${RED}File docker-compose.yml tidak ditemukan!${NC}"
         fi
         ;;
     esac
+  fi
+  
+  # Redis setup terpisah
+  echo -e "${YELLOW}Apakah ingin setup Redis? [y/N]${NC}"
+  read -p "Pilihan: " setup_redis
+  
+  if [[ "$setup_redis" =~ ^[Yy]$ ]]; then
+    apt install -y docker.io docker-compose
     
-    # Auto setup .env dengan validasi dan backup
-    echo -e "${YELLOW}Mengupdate file .env...${NC}"
-    
-    # Validasi .env.example
-    if [ -f ".env.example" ] && [ ! -f ".env" ]; then
-      if grep -q "DATABASE_URL" .env.example; then
-        echo -e "${GREEN}File .env.example valid, melakukan copy...${NC}"
-        cp .env.example .env
-      else
-        echo -e "${RED}Warning: .env.example tidak mengandung DATABASE_URL!${NC}"
-        read -p "Lanjutkan tanpa copy .env.example? [y/N] " continue_choice
-        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
-          touch .env
-        else
-          return 1
-        fi
-      fi
-    fi
-    
-    if [ -f ".env" ]; then
-      # Backup .env lama
-      backup_time=$(date +"%Y%m%d_%H%M%S")
-      cp .env ".env.backup_$backup_time"
-      echo -e "${YELLOW}Backup .env dibuat: .env.backup_$backup_time${NC}"
-      
-      # Konfirmasi sebelum update
-      echo -e "${YELLOW}File .env akan diupdate dengan konfigurasi database baru.${NC}"
-      read -p "Lanjutkan? [Y/n] " confirm
-      if [[ "$confirm" =~ ^[Nn]$ ]]; then
-        echo -e "${YELLOW}Update .env dibatalkan${NC}"
-        return 0
-      fi
-      
-      # Hapus konfigurasi database lama
-      sed -i '/^POSTGRES_/d;/^MYSQL_/d;/^DATABASE_URL/d;/^REDIS_/d' .env
-      
-      # Tambahkan konfigurasi baru
-      case $db_choice in
-        1) # PostgreSQL
-          echo "DATABASE_URL=postgresql://${db_user}:${db_pass}@localhost:5432/${db_name}?schema=public" >> .env
-          ;;
-        2) # MySQL
-          echo "DATABASE_URL=mysql://${db_user}:${db_pass}@localhost:3306/${db_name}" >> .env
-          ;;
-        3) # SQLite
-          echo "DATABASE_URL=file:./${folder_name}.db" >> .env
-          ;;
-        4) # Redis
-          echo "REDIS_HOST=localhost" >> .env
-          echo "REDIS_PORT=6379" >> .env
-          ;;
-      esac
-      
-      echo -e "${GREEN}File .env berhasil diupdate!${NC}"
-    else
-      echo -e "${RED}Error: File .env tidak ditemukan!${NC}"
-    fi
+    cat > docker-compose-redis.yml <<EOL
+version: '3.8'
+services:
+  redis_${folder_name}:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
 
-    # Show credentials
-    echo -e "${GREEN}Database setup selesai!${NC}"
+volumes:
+  redis_data:
+EOL
+    
+    docker-compose -f docker-compose-redis.yml up -d
+    
+    # Update .env for Redis
+    if [ -f ".env" ]; then
+      sed -i '/^REDIS_/d' .env
+      echo "REDIS_HOST=localhost" >> .env
+      echo "REDIS_PORT=6379" >> .env
+      echo -e "${GREEN}Redis configuration added to .env${NC}"
+    fi
+    
+    echo -e "${GREEN}Redis setup selesai!${NC}"
     echo -e "${YELLOW}Detail koneksi:${NC}"
+    echo "Host: localhost"
+    echo "Port: 6379"
+  fi
+}
+
+update_env_database() {
+  # Fungsi untuk update .env file
+  if [ -f ".env" ]; then
+    # Backup .env lama
+    backup_time=$(date +"%Y%m%d_%H%M%S")
+    cp .env ".env.backup_$backup_time"
+    echo -e "${YELLOW}Backup .env dibuat: .env.backup_$backup_time${NC}"
+    
+    # Konfirmasi sebelum update
+    echo -e "${YELLOW}File .env akan diupdate dengan konfigurasi database baru.${NC}"
+    read -p "Lanjutkan? [Y/n] " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+      echo -e "${YELLOW}Update .env dibatalkan${NC}"
+      return 0
+    fi
+    
+    # Hapus konfigurasi database lama
+    sed -i '/^POSTGRES_/d;/^MYSQL_/d;/^DATABASE_URL/d' .env
+    
+    # Tambahkan konfigurasi baru
     case $db_choice in
       1) # PostgreSQL
-        echo "Type: PostgreSQL"
-        echo "Host: localhost"
-        echo "Port: 5432"
-        echo "Database: ${db_name}"
-        echo "Username: ${db_user}"
-        echo "Password: ${db_pass}"
+        echo "DATABASE_URL=postgresql://${db_user}:${db_pass}@localhost:5432/${db_name}?schema=public" >> .env
         ;;
       2) # MySQL
-        echo "Type: MySQL"
-        echo "Host: localhost"
-        echo "Port: 3306"
-        echo "Database: ${db_name}"
-        echo "Username: ${db_user}"
-        echo "Password: ${db_pass}"
+        echo "DATABASE_URL=mysql://${db_user}:${db_pass}@localhost:3306/${db_name}" >> .env
         ;;
       3) # SQLite
-        echo "Type: SQLite"
-        echo "File: $(pwd)/${folder_name}.db"
-        ;;
-      4) # Redis
-        echo "Type: Redis"
-        echo "Host: localhost"
-        echo "Port: 6379"
+        echo "DATABASE_URL=file:./${folder_name}.db" >> .env
         ;;
     esac
     
-    echo -e "${YELLOW}Simpan informasi ini di .env project Anda!${NC}"
+    echo -e "${GREEN}File .env berhasil diupdate!${NC}"
+  else
+    echo -e "${RED}Error: File .env tidak ditemukan!${NC}"
   fi
 }
 
