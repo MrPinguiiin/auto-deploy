@@ -260,64 +260,97 @@ EOL
 # Main script
 echo -e "${YELLOW}Starting SvelteKit auto-deploy setup...${NC}"
 
+# Inisialisasi status tahapan
+declare -A completed_steps
+
+# Fungsi untuk mengecek dan menandai tahapan
+check_step() {
+  local step_name=$1
+  local step_desc=$2
+  
+  if [[ -z "${completed_steps[$step_name]}" ]]; then
+    echo -e "${YELLOW}${step_desc}...${NC}"
+    return 0
+  else
+    echo -e "${GREEN}[SKIPPED] ${step_desc} (sudah dilakukan sebelumnya)${NC}"
+    return 1
+  fi
+}
+
+# Fungsi untuk menandai tahapan selesai
+mark_completed() {
+  local step_name=$1
+  completed_steps[$step_name]=1
+}
+
 # Step 1: Update and install git
-echo -e "${YELLOW}Updating packages and installing git...${NC}"
-apt update
-apt install -y git
-
-# Step 2: Choose JS runtime
-echo -e "${YELLOW}Choose your JavaScript runtime:${NC}"
-echo "1) npm (default)"
-echo "2) pnpm"
-echo "3) bun"
-echo "4) deno"
-read -p "Enter choice [1-4]: " runtime_choice
-
-install_runtime $runtime_choice
-
-# Step 3: Install Nginx
-echo -e "${YELLOW}Installing Nginx...${NC}"
-apt install -y nginx
-
-# Step 4: Git clone
-cd /var/www
-
-echo -e "${YELLOW}Is your repository private? [y/N]${NC}"
-read -p "Your choice: " is_private
-
-if [[ "$is_private" =~ ^[Yy]$ ]]; then
-  echo -e "${RED}WARNING: Private repository detected.${NC}"
-  echo -e "${YELLOW}Generating SSH key...${NC}"
-  ssh-keygen -t ed25519 -C "deploy-key" -f ~/.ssh/deploy_key -N ""
-  
-  echo -e "${YELLOW}Please add this public key to your GitHub deploy keys:${NC}"
-  cat ~/.ssh/deploy_key.pub
-  echo -e "\n${YELLOW}Press Enter to continue after adding the key...${NC}"
-  read
-  
-  echo -e "${YELLOW}Cloning private repository...${NC}"
-  eval "$(ssh-agent -s)"
-  ssh-add ~/.ssh/deploy_key
-else
-  echo -e "${GREEN}Cloning public repository...${NC}"
+if check_step "step1" "Updating packages and installing git"; then
+  apt update
+  apt install -y git
+  mark_completed "step1"
 fi
 
-read -p "Enter Git repository URL: " repo_url
-read -p "Enter project folder name: " folder_name
+# Step 2: Choose JS runtime
+if check_step "step2" "Choosing JavaScript runtime"; then
+  echo -e "${YELLOW}Choose your JavaScript runtime:${NC}"
+  echo "1) npm (default)"
+  echo "2) pnpm"
+  echo "3) bun"
+  echo "4) deno"
+  read -p "Enter choice [1-4]: " runtime_choice
 
-git clone $repo_url $folder_name
-cd $folder_name
+  install_runtime $runtime_choice
+  mark_completed "step2"
+fi
 
-setup_database
+# Step 3: Install Nginx
+if check_step "step3" "Installing Nginx"; then
+  apt install -y nginx
+  mark_completed "step3"
+fi
+
+# Step 4: Git clone
+if check_step "step4" "Cloning repository"; then
+  cd /var/www
+  
+  echo -e "${YELLOW}Is your repository private? [y/N]${NC}"
+  read -p "Your choice: " is_private
+
+  if [[ "$is_private" =~ ^[Yy]$ ]]; then
+    echo -e "${RED}WARNING: Private repository detected.${NC}"
+    echo -e "${YELLOW}Generating SSH key...${NC}"
+    ssh-keygen -t ed25519 -C "deploy-key" -f ~/.ssh/deploy_key -N ""
+    
+    echo -e "${YELLOW}Please add this public key to your GitHub deploy keys:${NC}"
+    cat ~/.ssh/deploy_key.pub
+    echo -e "\n${YELLOW}Press Enter to continue after adding the key...${NC}"
+    read
+    
+    echo -e "${YELLOW}Cloning private repository...${NC}"
+    eval "$(ssh-agent -s)"
+    ssh-add ~/.ssh/deploy_key
+  else
+    echo -e "${GREEN}Cloning public repository...${NC}"
+  fi
+
+  read -p "Enter Git repository URL: " repo_url
+  read -p "Enter project folder name: " folder_name
+
+  git clone $repo_url $folder_name
+  cd $folder_name
+  mark_completed "step4"
+fi
 
 # Step 5: Install dependencies
-echo -e "${YELLOW}Installing dependencies...${NC}"
-case $runtime_choice in
-  1) npm install ;;
-  2) pnpm install ;;
-  3) bun install ;;
-  4) deno cache deps.ts ;;
-esac
+if check_step "step5" "Installing dependencies"; then
+  case $runtime_choice in
+    1) npm install ;;
+    2) pnpm install ;;
+    3) bun install ;;
+    4) deno cache deps.ts ;;
+  esac
+  mark_completed "step5"
+fi
 
 # Step 6: Build project
 build_project() {
