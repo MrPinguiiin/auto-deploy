@@ -75,6 +75,186 @@ EOL
   esac
 }
 
+# Function to setup database
+setup_database() {
+  echo -e "${YELLOW}Apakah ingin setup database? [y/N]${NC}"
+  read -p "Pilihan: " setup_db
+  
+  if [[ "$setup_db" =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}Pilih database:${NC}"
+    echo "1) PostgreSQL"
+    echo "2) MySQL"
+    echo "3) SQLite"
+    echo "4) Redis"
+    echo "5) Gunakan file docker-compose.yml sendiri"
+    read -p "Pilihan [1-5]: " db_choice
+
+    # Generate random credentials
+    db_name="db_${folder_name}"
+    db_user="user_$(openssl rand -hex 3)"
+    db_pass="$(openssl rand -base64 12)"
+
+    case $db_choice in
+      1|2|4) # PostgreSQL/MySQL/Redis
+        apt install -y docker.io docker-compose
+        
+        cat > docker-compose.yml <<EOL
+version: '3.8'
+services:
+  ${db_name}:
+EOL
+        
+        if [ $db_choice -eq 1 ]; then
+          cat >> docker-compose.yml <<EOL
+    image: postgres:latest
+    environment:
+      POSTGRES_DB: ${db_name}
+      POSTGRES_USER: ${db_user}
+      POSTGRES_PASSWORD: ${db_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+EOL
+        elif [ $db_choice -eq 2 ]; then
+          cat >> docker-compose.yml <<EOL
+    image: mysql:latest
+    environment:
+      MYSQL_DATABASE: ${db_name}
+      MYSQL_USER: ${db_user}
+      MYSQL_PASSWORD: ${db_pass}
+      MYSQL_ROOT_PASSWORD: ${db_pass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+EOL
+        else
+          cat >> docker-compose.yml <<EOL
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+EOL
+        fi
+        
+        cat >> docker-compose.yml <<EOL
+volumes:
+  pg_data:
+  mysql_data:
+  redis_data:
+EOL
+        
+        docker-compose up -d
+        ;;
+      
+      3) # SQLite
+        touch "${folder_name}.db"
+        ;;
+      
+      5) # Custom compose file
+        if [ -f "docker-compose.yml" ]; then
+          docker-compose up -d
+        else
+          echo -e "${RED}File docker-compose.yml tidak ditemukan!${NC}"
+        fi
+        ;;
+    esac
+    
+    # Auto setup .env dengan validasi dan backup
+    echo -e "${YELLOW}Mengupdate file .env...${NC}"
+    
+    # Validasi .env.example
+    if [ -f ".env.example" ] && [ ! -f ".env" ]; then
+      if grep -q "DATABASE_URL" .env.example; then
+        echo -e "${GREEN}File .env.example valid, melakukan copy...${NC}"
+        cp .env.example .env
+      else
+        echo -e "${RED}Warning: .env.example tidak mengandung DATABASE_URL!${NC}"
+        read -p "Lanjutkan tanpa copy .env.example? [y/N] " continue_choice
+        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
+          touch .env
+        else
+          return 1
+        fi
+      fi
+    fi
+    
+    if [ -f ".env" ]; then
+      # Backup .env lama
+      backup_time=$(date +"%Y%m%d_%H%M%S")
+      cp .env ".env.backup_$backup_time"
+      echo -e "${YELLOW}Backup .env dibuat: .env.backup_$backup_time${NC}"
+      
+      # Konfirmasi sebelum update
+      echo -e "${YELLOW}File .env akan diupdate dengan konfigurasi database baru.${NC}"
+      read -p "Lanjutkan? [Y/n] " confirm
+      if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        echo -e "${YELLOW}Update .env dibatalkan${NC}"
+        return 0
+      fi
+      
+      # Hapus konfigurasi database lama
+      sed -i '/^POSTGRES_/d;/^MYSQL_/d;/^DATABASE_URL/d;/^REDIS_/d' .env
+      
+      # Tambahkan konfigurasi baru
+      case $db_choice in
+        1) # PostgreSQL
+          echo "DATABASE_URL=postgresql://${db_user}:${db_pass}@localhost:5432/${db_name}?schema=public" >> .env
+          ;;
+        2) # MySQL
+          echo "DATABASE_URL=mysql://${db_user}:${db_pass}@localhost:3306/${db_name}" >> .env
+          ;;
+        3) # SQLite
+          echo "DATABASE_URL=file:./${folder_name}.db" >> .env
+          ;;
+        4) # Redis
+          echo "REDIS_HOST=localhost" >> .env
+          echo "REDIS_PORT=6379" >> .env
+          ;;
+      esac
+      
+      echo -e "${GREEN}File .env berhasil diupdate!${NC}"
+    else
+      echo -e "${RED}Error: File .env tidak ditemukan!${NC}"
+    fi
+
+    # Show credentials
+    echo -e "${GREEN}Database setup selesai!${NC}"
+    echo -e "${YELLOW}Detail koneksi:${NC}"
+    case $db_choice in
+      1) # PostgreSQL
+        echo "Type: PostgreSQL"
+        echo "Host: localhost"
+        echo "Port: 5432"
+        echo "Database: ${db_name}"
+        echo "Username: ${db_user}"
+        echo "Password: ${db_pass}"
+        ;;
+      2) # MySQL
+        echo "Type: MySQL"
+        echo "Host: localhost"
+        echo "Port: 3306"
+        echo "Database: ${db_name}"
+        echo "Username: ${db_user}"
+        echo "Password: ${db_pass}"
+        ;;
+      3) # SQLite
+        echo "Type: SQLite"
+        echo "File: $(pwd)/${folder_name}.db"
+        ;;
+      4) # Redis
+        echo "Type: Redis"
+        echo "Host: localhost"
+        echo "Port: 6379"
+        ;;
+    esac
+    
+    echo -e "${YELLOW}Simpan informasi ini di .env project Anda!${NC}"
+  fi
+}
+
 # Main script
 echo -e "${YELLOW}Starting SvelteKit auto-deploy setup...${NC}"
 
@@ -125,6 +305,8 @@ read -p "Enter project folder name: " folder_name
 
 git clone $repo_url $folder_name
 cd $folder_name
+
+setup_database
 
 # Step 5: Install dependencies
 echo -e "${YELLOW}Installing dependencies...${NC}"
